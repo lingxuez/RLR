@@ -84,18 +84,20 @@ public class LR {
 
 		// Streaming through training data from stdin
 		BufferedReader trainDataIn = new BufferedReader(new InputStreamReader(System.in));
-	
+		int totalIters = 0;
+
 		for (int iter = 1; iter <= maxIter; iter++) {
-			int totalIters = 0;
 			double rate = initRate / (iter * iter); // learning rate
 
 			// One pass through training samples
 			for (int n = 0; n < trainSize; n++) {
 				totalIters += 1;
 				String trainDoc = trainDataIn.readLine();
+				Vector<String> tokens = tokenizeDoc(trainDoc);
+
 				// one binary classifier for each label
 				for (String targetLabel : targetLabels) {
-					trainOneDoc(targetLabel, trainDoc, totalIters, coeffLRs.get(targetLabel),
+					trainOneDoc(targetLabel, tokens, totalIters, coeffLRs.get(targetLabel),
 							coeffUpdateLags.get(targetLabel), vocSize, rate, regCoeff);
 				}
 			}
@@ -110,17 +112,21 @@ public class LR {
 
 		return coeffLRs;
 	}
-	
+
 	/**
-	 * Perform in the end of each epoch to update all lagged regularizations.
+	 * Perform in the end of each epoch to update all lagged
+	 * regularizations.
 	 * 
-	 * @param coeffLR model coefficients
-	 * @param coeffUpdateLag lagged iters
-	 * @param regCoeff regularization coefficients
-	 * @param rate learning rate
-	 * @param totalIters current iter number
-	 * 
-	 * Note that after this function call, all values in coeffUpdatLag are reset to zero. 
+	 * @param coeffLR
+	 *                model coefficients
+	 * @param coeffUpdateLag
+	 *                lagged iters
+	 * @param regCoeff
+	 *                regularization coefficients
+	 * @param rate
+	 *                learning rate
+	 * @param totalIters
+	 *                current iter number
 	 */
 	private static void updateRegularization(Map<Integer, Double> coeffLR, Map<Integer, Integer> coeffUpdateLag,
 			double regCoeff, double rate, int totalIters) {
@@ -130,8 +136,8 @@ public class LR {
 					* Math.pow(1 - 2 * rate * regCoeff, totalIters - coeffUpdateLag.get(wordID));
 			// update
 			coeffLR.put(wordID, newcoeff);
-			coeffUpdateLag.put(wordID, 0); // reset to zero for next epoch
-		}	
+			coeffUpdateLag.put(wordID, totalIters);
+		}
 	}
 
 	/**
@@ -140,15 +146,15 @@ public class LR {
 	 * 
 	 * @param targetLabel
 	 *                the classifier to update
-	 * @param trainDoc
-	 *                the document string
+	 * @param tokens
+	 *                the document after tokenization
 	 * @param totalIters
 	 *                keep track of current iteration for lazy
 	 *                regularization update
 	 * @param coeffLR
-	 *                current model parameters
+	 *                model parameters, to be updated
 	 * @param coeffUpdateLag
-	 *                current lag iterations
+	 *                lag iterations for regularization, to be updated
 	 * @param vocSize
 	 *                vocabulary size for the hash trick
 	 * @param rate
@@ -156,58 +162,31 @@ public class LR {
 	 * @param regCoeff
 	 *                regularization coefficients
 	 */
-	private static void trainOneDoc(String targetLabel, String trainDoc, int totalIters,
+	private static void trainOneDoc(String targetLabel, Vector<String> tokens, int totalIters,
 			Map<Integer, Double> coeffLR, Map<Integer, Integer> coeffUpdateLag, int vocSize, double rate,
 			double regCoeff) {
-		Vector<String> tokens = tokenizeDoc(trainDoc);
+		
 		// response = {0, 1} for the target label
 		int response = getResponse(tokens.elementAt(1), targetLabel);
 
-		// count frequency of words (words starting from the 3rd token,
-		// index 2)
-		Map<Integer, Integer> wordCounts = getWordCounts(tokens, vocSize, 2);
-
-		// update coeffLR and coeffUpdateLag for the appeared words
-		updateCoeff(response, wordCounts, coeffLR, coeffUpdateLag, totalIters, rate, regCoeff);
-	}
-
-	/**
-	 * Update corresponding coefficients for a subset of given wordIDs and
-	 * counts.
-	 * 
-	 * @param response
-	 *                binary label
-	 * @param wordCounts
-	 *                map of words and counts
-	 * @param coeffLR
-	 *                map of coefficients to be updated
-	 * @param coeffUpdateLag
-	 *                map of lags for lazy regularizations to be updated
-	 * @param totalIters
-	 *                keep track of current iteration number
-	 * @param rate
-	 *                given learning rate
-	 * @param regCoeff
-	 *                given regularization coefficient
-	 */
-	private static void updateCoeff(int response, Map<Integer, Integer> wordCounts, Map<Integer, Double> coeffLR,
-			Map<Integer, Integer> coeffUpdateLag, int totalIters, double rate, double regCoeff) {
 		// prediction using current model parameters
-		double predict = getDocPrediction(wordCounts, coeffLR);
+		double predict = getDocPrediction(tokens, coeffLR, vocSize);
+		
+		int wordID;
+		double newcoeff;
+		// update coeffLR and coeffUpdateLag for the appeared words
+		for (int i=2; i<tokens.size(); i++) {
+			String token = tokens.elementAt(i);
+			wordID = wordToID(token, vocSize);
+			newcoeff = 0;
 
-		// update corresponding coefficients using word counts
-		for (Integer wordID : wordCounts.keySet()) {
-			int count = wordCounts.get(wordID);
-			// new word
-			if (!coeffLR.containsKey(wordID)) {
-				coeffLR.put(wordID, 0.0);
-				coeffUpdateLag.put(wordID, 0);
+			if (coeffLR.containsKey(wordID)) {
+				// regularization that would have been performed
+				newcoeff = coeffLR.get(wordID) * Math.pow(1 - 2 * rate * regCoeff,
+						totalIters - coeffUpdateLag.get(wordID));
 			}
-			// regularization that would have been performed
-			double newcoeff = coeffLR.get(wordID)
-					* Math.pow(1 - 2 * rate * regCoeff, totalIters - coeffUpdateLag.get(wordID));
 			// gradient descent contributed from data
-			newcoeff += rate * (response - predict) * count;
+			newcoeff += rate * (response - predict);
 			// update
 			coeffLR.put(wordID, newcoeff);
 			coeffUpdateLag.put(wordID, totalIters);
@@ -218,18 +197,20 @@ public class LR {
 	 * Get prediction of probability for one example using current parameter
 	 * for logistic regression.
 	 * 
-	 * @param wordCounts
-	 *                bag-of-words features
+	 * @param tokens
+	 *                tokenized document; word starting at index 2
 	 * @param coeffLR
 	 *                current model parameter
 	 * @return
 	 */
-	private static double getDocPrediction(Map<Integer, Integer> wordCounts, Map<Integer, Double> coeffLR) {
+	private static double getDocPrediction(Vector<String> tokens, Map<Integer, Double> coeffLR, int vocSize) {
 		double score = 0;
-		for (Integer wordID : wordCounts.keySet()) {
+		for (int i=2; i<tokens.size(); i++) {
+			String token = tokens.elementAt(i);
+			int wordID = wordToID(token, vocSize);
 			// only use words seen in training samples
 			if (coeffLR.containsKey(wordID)) {
-				score += wordCounts.get(wordID) * coeffLR.get(wordID);
+				score += coeffLR.get(wordID);
 			}
 		}
 		return sigmoid(score);
@@ -256,18 +237,16 @@ public class LR {
 
 		while ((testDoc = testDataIn.readLine()) != null) {
 
-			// frequency of words (words start from index 2)
 			Vector<String> tokens = tokenizeDoc(testDoc);
-			Map<Integer, Integer> wordCounts = getWordCounts(tokens, vocSize, 2);
 
 			// prediction of probability for each label
 			int labelNumber = coeffLRs.keySet().size();
 			int i = 0;
-			double maxpredict = 0;
+			double predict, maxpredict = 0;
 			String predLabel = "";
 
 			for (String targetLabel : coeffLRs.keySet()) {
-				double predict = getDocPrediction(wordCounts, coeffLRs.get(targetLabel));
+				predict = getDocPrediction(tokens, coeffLRs.get(targetLabel), vocSize);
 				String output = String.format("%s\t%f", targetLabel, predict);
 				if (i < labelNumber) {
 					output += ",";
@@ -324,30 +303,6 @@ public class LR {
 			}
 		}
 		return tokens;
-	}
-
-	/**
-	 * Obtain the word frequencies in a given document.
-	 * 
-	 * @param tokens
-	 *                vectors of strings of words
-	 * @param vocSize
-	 *                vocabulary size for hash trick
-	 * @param startIndex
-	 *                start counting from the index (inclusive)
-	 * @return <key=wordID, value=count>
-	 */
-	private static Map<Integer, Integer> getWordCounts(Vector<String> tokens, int vocSize, int startIndex) {
-		Map<Integer, Integer> wordCounts = new HashMap<>();
-		for (int i = startIndex; i < tokens.size(); i++) {
-			Integer wordID = wordToID(tokens.elementAt(i), vocSize);
-			if (wordCounts.containsKey(wordID)) {
-				wordCounts.put(wordID, wordCounts.get(wordID) + 1);
-			} else {
-				wordCounts.put(wordID, 1);
-			}
-		}
-		return wordCounts;
 	}
 
 	/**
