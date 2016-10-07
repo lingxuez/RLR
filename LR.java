@@ -37,17 +37,23 @@ public class LR {
 		int trainSize = Integer.valueOf(args[4]);
 		String testFile = args[5];
 
-		// training; one binary classifier for each label
-		String targetLabel = "Place";
-		Map<Integer, Double> coeffLR = trainLR(targetLabel, vocSize, rate, regCoeff, maxIter, trainSize);
+		// 17 binary classifiers, one for each label
+		String[] targetLabels = { "CelestialBody", "Biomolecule", "Organisation", "Work", "Agent", "Event",
+				"Person", "ChemicalSubstance", "Place", "Location", "SportsSeason", "Activity",
+				"Device", "TimePeriod", "other", "MeanOfTransportation", "Species" };
 
-		// prediction on test set
-		predictLR(targetLabel, coeffLR, testFile);
+		// training; one binary classifier for each label
+		Map<String, Map<Integer, Double>> coeffLRs = trainLR(targetLabels, vocSize, rate, regCoeff, maxIter,
+				trainSize);
+
+		// prediction on test set; get probabilities for all labels
+		predictLR(coeffLRs, testFile, vocSize);
 	}
 
 	/**
-	 * Train a logistic regression using stochastic gradient descent by
-	 * streaming through training data from stdin.
+	 * Train the logistic regression using stochastic gradient descent by
+	 * streaming through training data from stdin. Train one binary
+	 * classifier for each label separately.
 	 * 
 	 * @param vocSize
 	 *                vocabulary size for hashtables using the hash trick
@@ -61,39 +67,95 @@ public class LR {
 	 * @param trainSize
 	 *                the size of training data, i.e., number of training
 	 *                samples
-	 * @return the hashtable containing coefficients for features
+	 * @return the hashtables containing coefficients for features, one set
+	 *         for each label
 	 */
-	public static Map<Integer, Double> trainLR(String targetLabel, int vocSize, double initRate, double regCoeff,
-			int maxIter, int trainSize) throws IOException {
-		// model coefficients
-		Map<Integer, Double> coeffLR = new HashMap<>();
-		// keep record for lazy update on regularization
-		Map<Integer, Integer> coeffUpdateLag = new HashMap<>();
+	public static Map<String, Map<Integer, Double>> trainLR(String[] targetLabels, int vocSize, double initRate,
+			double regCoeff, int maxIter, int trainSize) throws IOException {
+		// <label, model coefficients>
+		Map<String, Map<Integer, Double>> coeffLRs = new HashMap<>();
+		// <label, lag_iters>, for lazy update on regularization
+		Map<String, Map<Integer, Integer>> coeffUpdateLags = new HashMap<>();
+		// Initialization
+		for (String label : targetLabels) {
+			coeffLRs.put(label, new HashMap<Integer, Double>());
+			coeffUpdateLags.put(label, new HashMap<Integer, Integer>());
+		}
 
-		// Streaming through trainin data from stdin, update model
-		// parameters
+		// Streaming through training data from stdin
 		BufferedReader trainDataIn = new BufferedReader(new InputStreamReader(System.in));
-		trainDataIn.mark(trainSize); // mark the starting point
-
-		int totalIters = 0;
+	
 		for (int iter = 1; iter <= maxIter; iter++) {
-			trainDataIn.reset();
-			// learning rate decays with iteration
-			double rate = initRate / (iter * iter);
+			int totalIters = 0;
+			double rate = initRate / (iter * iter); // learning rate
 
 			// One pass through training samples
 			for (int n = 0; n < trainSize; n++) {
 				totalIters += 1;
 				String trainDoc = trainDataIn.readLine();
-				trainOneDoc(targetLabel, trainDoc, totalIters, coeffLR, coeffUpdateLag, vocSize, rate,
-						regCoeff);
+				// one binary classifier for each label
+				for (String targetLabel : targetLabels) {
+					trainOneDoc(targetLabel, trainDoc, totalIters, coeffLRs.get(targetLabel),
+							coeffUpdateLags.get(targetLabel), vocSize, rate, regCoeff);
+				}
+			}
+
+			// lazy update for regularization
+			for (String targetLabel : targetLabels) {
+				updateRegularization(coeffLRs.get(targetLabel), coeffUpdateLags.get(targetLabel),
+						regCoeff, rate, totalIters);
 			}
 		}
 		trainDataIn.close();
 
-		return coeffLR;
+		return coeffLRs;
+	}
+	
+	/**
+	 * Perform in the end of each epoch to update all lagged regularizations.
+	 * 
+	 * @param coeffLR model coefficients
+	 * @param coeffUpdateLag lagged iters
+	 * @param regCoeff regularization coefficients
+	 * @param rate learning rate
+	 * @param totalIters current iter number
+	 * 
+	 * Note that after this function call, all values in coeffUpdatLag are reset to zero. 
+	 */
+	private static void updateRegularization(Map<Integer, Double> coeffLR, Map<Integer, Integer> coeffUpdateLag,
+			double regCoeff, double rate, int totalIters) {
+		for (Integer wordID : coeffLR.keySet()) {
+			// regularization that would have been performed
+			double newcoeff = coeffLR.get(wordID)
+					* Math.pow(1 - 2 * rate * regCoeff, totalIters - coeffUpdateLag.get(wordID));
+			// update
+			coeffLR.put(wordID, newcoeff);
+			coeffUpdateLag.put(wordID, 0); // reset to zero for next epoch
+		}	
 	}
 
+	/**
+	 * Update the coefficients for a given classifier using gradient descent
+	 * from one document.
+	 * 
+	 * @param targetLabel
+	 *                the classifier to update
+	 * @param trainDoc
+	 *                the document string
+	 * @param totalIters
+	 *                keep track of current iteration for lazy
+	 *                regularization update
+	 * @param coeffLR
+	 *                current model parameters
+	 * @param coeffUpdateLag
+	 *                current lag iterations
+	 * @param vocSize
+	 *                vocabulary size for the hash trick
+	 * @param rate
+	 *                learning rate
+	 * @param regCoeff
+	 *                regularization coefficients
+	 */
 	private static void trainOneDoc(String targetLabel, String trainDoc, int totalIters,
 			Map<Integer, Double> coeffLR, Map<Integer, Integer> coeffUpdateLag, int vocSize, double rate,
 			double regCoeff) {
@@ -157,14 +219,15 @@ public class LR {
 	 * for logistic regression.
 	 * 
 	 * @param wordCounts
+	 *                bag-of-words features
 	 * @param coeffLR
+	 *                current model parameter
 	 * @return
 	 */
 	private static double getDocPrediction(Map<Integer, Integer> wordCounts, Map<Integer, Double> coeffLR) {
 		double score = 0;
 		for (Integer wordID : wordCounts.keySet()) {
-			// only use words that have been seen in training
-			// samples
+			// only use words seen in training samples
 			if (coeffLR.containsKey(wordID)) {
 				score += wordCounts.get(wordID) * coeffLR.get(wordID);
 			}
@@ -176,15 +239,16 @@ public class LR {
 	 * Predict labels on testing data in the testFile. Output is written to
 	 * stdout.
 	 * 
-	 * @param coeffLR
-	 *                trained coefficients for logistic regression
+	 * @param coeffLRs
+	 *                trained coefficients for logistic regression, one
+	 *                classifier for each label
 	 * @param testFile
 	 *                file name of the test data
+	 * @param vocSize
+	 *                the vocabulary size for hash trick
 	 */
-	public static void predictLR(String targetLabel, Map<Integer, Double> coeffLR, String testFile)
+	public static void predictLR(Map<String, Map<Integer, Double>> coeffLRs, String testFile, int vocSize)
 			throws IOException {
-		// vocabulary size
-		int vocSize = coeffLR.size();
 
 		// Streaming through testing data from file
 		BufferedReader testDataIn = new BufferedReader(new FileReader(testFile));
@@ -192,17 +256,35 @@ public class LR {
 
 		while ((testDoc = testDataIn.readLine()) != null) {
 
-			// count frequency of words (words starting from index 2)
+			// frequency of words (words start from index 2)
 			Vector<String> tokens = tokenizeDoc(testDoc);
 			Map<Integer, Integer> wordCounts = getWordCounts(tokens, vocSize, 2);
-			
+
+			// prediction of probability for each label
+			int labelNumber = coeffLRs.keySet().size();
+			int i = 0;
+			double maxpredict = 0;
+			String predLabel = "";
+
+			for (String targetLabel : coeffLRs.keySet()) {
+				double predict = getDocPrediction(wordCounts, coeffLRs.get(targetLabel));
+				String output = String.format("%s\t%f", targetLabel, predict);
+				if (i < labelNumber) {
+					output += ",";
+				}
+				System.out.print(output);
+				i++;
+
+				// for debugging
+				if (predict > maxpredict) {
+					maxpredict = predict;
+					predLabel = targetLabel;
+				}
+			}
+
 			// for debugging
-			System.out.print(String.format("docid=%s, labels=%s, ", tokens.elementAt(0), tokens.elementAt(1)));
-			
-			// prediction and output
-			double predict = getDocPrediction(wordCounts, coeffLR);
-			System.out.print(String.format("%s\t%f", targetLabel, predict));
-			
+			System.out.print(String.format(" || true=%s,predict=%s", tokens.elementAt(1), predLabel));
+
 			System.out.print("\n");
 		}
 
@@ -244,6 +326,17 @@ public class LR {
 		return tokens;
 	}
 
+	/**
+	 * Obtain the word frequencies in a given document.
+	 * 
+	 * @param tokens
+	 *                vectors of strings of words
+	 * @param vocSize
+	 *                vocabulary size for hash trick
+	 * @param startIndex
+	 *                start counting from the index (inclusive)
+	 * @return <key=wordID, value=count>
+	 */
 	private static Map<Integer, Integer> getWordCounts(Vector<String> tokens, int vocSize, int startIndex) {
 		Map<Integer, Integer> wordCounts = new HashMap<>();
 		for (int i = startIndex; i < tokens.size(); i++) {

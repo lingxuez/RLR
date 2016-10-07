@@ -1,0 +1,17 @@
+CelestialBody
+Biomolecule
+Organisation
+Work
+Agent
+Event
+Person
+ChemicalSubstance
+Place
+Location
+SportsSeason
+Activity
+Device
+TimePeriod
+other
+MeanOfTransportation
+Species
