@@ -4,7 +4,6 @@ import java.io.IOException;
 import java.io.InputStreamReader;
 import java.util.HashMap;
 import java.util.Map;
-import java.util.Vector;
 
 /*
  * 10-605 hw3
@@ -12,6 +11,14 @@ import java.util.Vector;
  * @version 2016/10/06
  */
 
+/**
+ * 10-605 hw3
+ * Regularized Logistic Regression using stochastic gradient descent and 
+ * efficient lazy-update of regularization.
+ * 
+ * @author Lingxue Zhu
+ * @version 2016/10/08
+ */
 public class LR {
 	// for soft sigmoid
 	private static double overflow = 20;
@@ -30,7 +37,7 @@ public class LR {
 					"Usage: java LR vocSize rate regCoeff maxIter trainSize testFile");
 		}
 		int vocSize = Integer.valueOf(args[0]);
-		double rate = Double.valueOf(args[1]);
+		double initRate = Double.valueOf(args[1]);
 		double regCoeff = Double.valueOf(args[2]);
 		int maxIter = Integer.valueOf(args[3]);
 		int trainSize = Integer.valueOf(args[4]);
@@ -42,8 +49,8 @@ public class LR {
 				"Device", "TimePeriod", "MeanOfTransportation", "Species", "other" };
 
 		// training; one binary classifier for each label
-		Map<Integer, double[]> coeffLRs = trainLR(targetLabels, vocSize, rate, regCoeff, maxIter, trainSize);
-
+		Map<Integer, double[]> coeffLRs = trainLR(targetLabels, vocSize, initRate, regCoeff, maxIter, trainSize);
+		
 		// prediction on test set; get probabilities for all labels
 		predictLR(targetLabels, coeffLRs, testFile, vocSize);
 	}
@@ -72,12 +79,13 @@ public class LR {
 	 */
 	public static Map<Integer, double[]> trainLR(String[] targetLabels, int vocSize, double initRate,
 			double regCoeff, int maxIter, int trainSize) throws IOException {
-
-		Map<Integer, double[]> coeffLRs = new HashMap<>(); // <wordID,
-									// coefficient>
-		Map<Integer, int[]> coeffUpdateLags = new HashMap<>(); // <wordID,
-									// lag_iters>
-
+		// <wordID, coefficients for all classifiers>
+		Map<Integer, double[]> coeffLRs = new HashMap<>(); 
+		// <wordID, lag_iters>
+		Map<Integer, int[]> coeffUpdateLags = new HashMap<>(); 
+		// bias term (without regularization); all other wordIDs are positive
+		coeffLRs.put(-1, new double[targetLabels.length]);
+		
 		// Streaming through training data from stdin
 		BufferedReader trainDataIn = new BufferedReader(new InputStreamReader(System.in));
 		int totalIters = 0;
@@ -89,14 +97,11 @@ public class LR {
 			for (int n = 0; n < trainSize; n++) {
 				totalIters += 1;
 				String trainDoc = trainDataIn.readLine();
-				Vector<String> tokens = tokenizeDoc(trainDoc);
 
-				// binary responses for each classifier and
-				// features
-				int[] responses = getResponses(tokens.elementAt(1), targetLabels);
-				// System.out.println(tokens.elementAt(1) +
-				// Arrays.toString(responses));
-				Map<Integer, Integer> wordCounts = getWordCounts(tokens, vocSize, 2);
+				// binary responses and features
+				String label = trainDoc.split("\\s+")[1];
+				int[] responses = getResponses(label, targetLabels);
+				Map<Integer, Integer> wordCounts = getWordCounts(trainDoc, vocSize, 2);
 
 				// update all binary classifiers
 				trainOneDoc(targetLabels, responses, wordCounts, totalIters, coeffLRs, coeffUpdateLags,
@@ -105,7 +110,6 @@ public class LR {
 
 			// lazy update for regularization
 			updateRegularization(coeffLRs, coeffUpdateLags, regCoeff, rate, totalIters);
-
 		}
 		trainDataIn.close();
 
@@ -131,13 +135,18 @@ public class LR {
 			double regCoeff, double rate, int totalIters) {
 
 		for (Integer wordID : coeffLRs.keySet()) {
+			// skip bias term
+			if (wordID < 0) {
+				continue;
+			}
+			
 			double[] newcoeff = coeffLRs.get(wordID);
 			int[] updateLags = coeffUpdateLags.get(wordID);
 
 			for (int i = 0; i < newcoeff.length; i++) {
 				// regularization that would have been performed
 				newcoeff[i] *= Math.pow(1 - 2 * rate * regCoeff, totalIters - updateLags[i]);
-				// new lag iterations
+				// new lagged iterations
 				updateLags[i] = totalIters;
 			}
 
@@ -176,6 +185,13 @@ public class LR {
 
 		// predicted probabilities using current model parameters
 		double[] predict = getDocPredictions(wordCounts, coeffLRs, labelNumber);
+		
+		// update bias term
+		double[] bias = coeffLRs.get(-1);
+		for (int i = 0; i < labelNumber; i++) {
+			bias[i] += rate * (responses[i] - predict[i]);
+		}
+		coeffLRs.put(-1, bias);
 
 		// update coeffLRs and coeffUpdateLags for the appeared words
 		for (Integer wordID : wordCounts.keySet()) {
@@ -221,8 +237,10 @@ public class LR {
 	 */
 	private static double[] getDocPredictions(Map<Integer, Integer> wordCounts, Map<Integer, double[]> coeffLRs,
 			int labelNumber) {
-		double[] score = new double[labelNumber];
-
+		// bias term
+		double[] score = coeffLRs.get(-1);
+		
+		// features: words in document
 		for (Integer wordID : wordCounts.keySet()) {
 			int count = wordCounts.get(wordID);
 			// only use words seen in training samples
@@ -258,42 +276,45 @@ public class LR {
 	public static void predictLR(String[] targetLabels, Map<Integer, double[]> coeffLRs, String testFile,
 			int vocSize) throws IOException {
 		int labelNumber = targetLabels.length;
-		double correctNumber = 0, totalDoc = 0;
+		
+		// -- START for accuracy --
+//		double correctNumber = 0, totalDoc = 0;
+		// -- END for accuracy --
 
 		// Streaming through testing data from file
 		BufferedReader testDataIn = new BufferedReader(new FileReader(testFile));
 		String testDoc;
 		while ((testDoc = testDataIn.readLine()) != null) {
-			Vector<String> tokens = tokenizeDoc(testDoc);
-			Map<Integer, Integer> wordCounts = getWordCounts(tokens, vocSize, 2);
+			Map<Integer, Integer> wordCounts = getWordCounts(testDoc, vocSize, 2);
 
 			// prediction of probability for each label
 			double[] predictions = getDocPredictions(wordCounts, coeffLRs, labelNumber);
 
-			// output
-//			for (int i = 0; i < labelNumber - 1; i++) {
-//				System.out.print(String.format("%s\t%f,", targetLabels[i], predictions[i]));
-//			}
-//			// last label: change line
-//			System.out.println(String.format("%s\t%f", targetLabels[labelNumber - 1],
-//					predictions[labelNumber - 1]));
-
-			// for accuracy: correctly classified numbers
-			int[] trueResponses = getResponses(tokens.elementAt(1), targetLabels);
-			for (int i = 0; i < labelNumber; i++) {
-				if ( (predictions[i] > 0.5 && trueResponses[i] == 1) || 
-					(predictions[i] < 0.5 && trueResponses[i] == 0)) {
-					correctNumber++;
-				}
+			// print out all pairs of <label, predicted probability>
+			for (int i = 0; i < labelNumber - 1; i++) {
+				System.out.print(String.format("%s\t%f,", targetLabels[i], predictions[i]));
 			}
-			totalDoc++;
-		}
-		
-		// accuracy
-		double accuracy = correctNumber / (totalDoc * labelNumber);
-		System.out.println(String.format("Accuracy=%.2f", accuracy));
+			// last label: change line
+			System.out.println(String.format("%s\t%f", targetLabels[labelNumber - 1],
+					predictions[labelNumber - 1]));
 
+			// -- START for accuracy: correctly classified numbers --
+//			String label = testDoc.split("\\s+")[1];
+//			int[] trueResponses = getResponses(label, targetLabels);
+//			for (int i = 0; i < labelNumber; i++) {
+//				if ( (predictions[i] > 0.5 && trueResponses[i] == 1) || 
+//					(predictions[i] < 0.5 && trueResponses[i] == 0)) {
+//					correctNumber++;
+//				}
+//			}
+//			totalDoc++;
+			// -- END for accuracy --
+		}
 		testDataIn.close();
+		
+		// -- START for accuracy --
+//		System.out.println(String.format("Accuracy=%.4f", 100*correctNumber / (totalDoc * labelNumber)));
+		// -- END for accuracy --		
 	}
 
 	/**
@@ -313,42 +334,27 @@ public class LR {
 	}
 
 	/**
-	 * Tokenize document.
+	 * Tokenize document, and obtain the word frequencies.
 	 * 
 	 * @param curDoc
 	 *                string for the full text in document
-	 * @return a list of tokens
-	 */
-	private static Vector<String> tokenizeDoc(String curDoc) {
-		String[] words = curDoc.split("\\s+");
-		Vector<String> tokens = new Vector<String>();
-		// keep docID and Labels unchaged
-		tokens.add(words[0]);
-		tokens.add(words[1]);
-		for (int i = 2; i < words.length; i++) {
-			words[i] = words[i].replaceAll("\\W", "");
-			if (words[i].length() > 0 && i >= 2) {
-				tokens.add(words[i].toLowerCase());
-			}
-		}
-		return tokens;
-	}
-
-	/**
-	 * Obtain the word frequencies in a given document.
-	 * 
-	 * @param tokens
-	 *                vectors of strings of words
 	 * @param vocSize
 	 *                vocabulary size for hash trick
 	 * @param startIndex
-	 *                start counting from the index (inclusive)
+	 *                words start from this index (inclusive)
 	 * @return <key=wordID, value=count>
 	 */
-	private static Map<Integer, Integer> getWordCounts(Vector<String> tokens, int vocSize, int startIndex) {
+	private static Map<Integer, Integer> getWordCounts(String curDoc, int vocSize, int startIndex) {		
+		// tokenize
+		String[] words = curDoc.split("\\s+");	
+		
+		// get counts, starting from given index
 		Map<Integer, Integer> wordCounts = new HashMap<>();
-		for (int i = startIndex; i < tokens.size(); i++) {
-			Integer wordID = wordToID(tokens.elementAt(i), vocSize);
+		for (int i = startIndex; i < words.length; i++) {
+			// tokenize
+			words[i] = words[i].replaceAll("\\W", "").toLowerCase();
+			// counting
+			int wordID = wordToID(words[i], vocSize);
 			if (wordCounts.containsKey(wordID)) {
 				wordCounts.put(wordID, wordCounts.get(wordID) + 1);
 			} else {
