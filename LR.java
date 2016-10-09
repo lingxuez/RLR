@@ -72,9 +72,11 @@ public class LR {
 	 */
 	public static Map<Integer, double[]> trainLR(String[] targetLabels, int vocSize, double initRate,
 			double regCoeff, int maxIter, int trainSize) throws IOException {
-		
-		Map<Integer, double[]> coeffLRs = new HashMap<>(); // <wordID, coefficient>
-		Map<Integer, int[]> coeffUpdateLags = new HashMap<>(); // <wordID, lag_iters>
+
+		Map<Integer, double[]> coeffLRs = new HashMap<>(); // <wordID,
+									// coefficient>
+		Map<Integer, int[]> coeffUpdateLags = new HashMap<>(); // <wordID,
+									// lag_iters>
 
 		// Streaming through training data from stdin
 		BufferedReader trainDataIn = new BufferedReader(new InputStreamReader(System.in));
@@ -89,9 +91,11 @@ public class LR {
 				String trainDoc = trainDataIn.readLine();
 				Vector<String> tokens = tokenizeDoc(trainDoc);
 
-				// binary responses for each classifier and features
+				// binary responses for each classifier and
+				// features
 				int[] responses = getResponses(tokens.elementAt(1), targetLabels);
-//				System.out.println(tokens.elementAt(1) + Arrays.toString(responses));
+				// System.out.println(tokens.elementAt(1) +
+				// Arrays.toString(responses));
 				Map<Integer, Integer> wordCounts = getWordCounts(tokens, vocSize, 2);
 
 				// update all binary classifiers
@@ -101,6 +105,7 @@ public class LR {
 
 			// lazy update for regularization
 			updateRegularization(coeffLRs, coeffUpdateLags, regCoeff, rate, totalIters);
+
 		}
 		trainDataIn.close();
 
@@ -253,30 +258,40 @@ public class LR {
 	public static void predictLR(String[] targetLabels, Map<Integer, double[]> coeffLRs, String testFile,
 			int vocSize) throws IOException {
 		int labelNumber = targetLabels.length;
+		double correctNumber = 0, totalDoc = 0;
 
 		// Streaming through testing data from file
 		BufferedReader testDataIn = new BufferedReader(new FileReader(testFile));
 		String testDoc;
-
 		while ((testDoc = testDataIn.readLine()) != null) {
-
 			Vector<String> tokens = tokenizeDoc(testDoc);
 			Map<Integer, Integer> wordCounts = getWordCounts(tokens, vocSize, 2);
-			
-			// for debugging
-			System.out.print(String.format("%s,",tokens.elementAt(1)));
 
 			// prediction of probability for each label
 			double[] predictions = getDocPredictions(wordCounts, coeffLRs, labelNumber);
 
-			for (int i = 0; i < labelNumber - 1; i++) {
-				System.out.print(String.format("%s\t%f,", targetLabels[i], predictions[i]));
-			}
-			// last label: change line
-			System.out.println(String.format("%s\t%f", targetLabels[labelNumber - 1],
-					predictions[labelNumber - 1]));
+			// output
+//			for (int i = 0; i < labelNumber - 1; i++) {
+//				System.out.print(String.format("%s\t%f,", targetLabels[i], predictions[i]));
+//			}
+//			// last label: change line
+//			System.out.println(String.format("%s\t%f", targetLabels[labelNumber - 1],
+//					predictions[labelNumber - 1]));
 
+			// for accuracy: correctly classified numbers
+			int[] trueResponses = getResponses(tokens.elementAt(1), targetLabels);
+			for (int i = 0; i < labelNumber; i++) {
+				if ( (predictions[i] > 0.5 && trueResponses[i] == 1) || 
+					(predictions[i] < 0.5 && trueResponses[i] == 0)) {
+					correctNumber++;
+				}
+			}
+			totalDoc++;
 		}
+		
+		// accuracy
+		double accuracy = correctNumber / (totalDoc * labelNumber);
+		System.out.println(String.format("Accuracy=%.2f", accuracy));
 
 		testDataIn.close();
 	}
@@ -312,7 +327,7 @@ public class LR {
 		tokens.add(words[1]);
 		for (int i = 2; i < words.length; i++) {
 			words[i] = words[i].replaceAll("\\W", "");
-			if (words[i].length() > 0 && i>=2) { 
+			if (words[i].length() > 0 && i >= 2) {
 				tokens.add(words[i].toLowerCase());
 			}
 		}
