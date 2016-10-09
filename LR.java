@@ -2,9 +2,7 @@ import java.io.BufferedReader;
 import java.io.FileReader;
 import java.io.IOException;
 import java.io.InputStreamReader;
-import java.util.ArrayList;
 import java.util.HashMap;
-import java.util.List;
 import java.util.Map;
 import java.util.Vector;
 
@@ -41,11 +39,10 @@ public class LR {
 		// 17 binary classifiers, one for each label
 		String[] targetLabels = { "CelestialBody", "Biomolecule", "Organisation", "Work", "Agent", "Event",
 				"Person", "ChemicalSubstance", "Place", "Location", "SportsSeason", "Activity",
-				"Device", "TimePeriod", "other", "MeanOfTransportation", "Species" };
+				"Device", "TimePeriod", "MeanOfTransportation", "Species", "other" };
 
 		// training; one binary classifier for each label
-		List<Map<Integer, Double>> coeffLRs = trainLR(targetLabels, vocSize, rate, regCoeff, maxIter,
-				trainSize);
+		Map<Integer, double[]> coeffLRs = trainLR(targetLabels, vocSize, rate, regCoeff, maxIter, trainSize);
 
 		// prediction on test set; get probabilities for all labels
 		predictLR(targetLabels, coeffLRs, testFile, vocSize);
@@ -73,18 +70,11 @@ public class LR {
 	 * @return the hashtables containing coefficients for features, one set
 	 *         for each label
 	 */
-	public static List<Map<Integer, Double>> trainLR(String[] targetLabels, int vocSize, double initRate,
+	public static Map<Integer, double[]> trainLR(String[] targetLabels, int vocSize, double initRate,
 			double regCoeff, int maxIter, int trainSize) throws IOException {
-		int labelNumber = targetLabels.length;
-		// <label, model coefficients>
-		List<Map<Integer, Double>> coeffLRs = new ArrayList<Map<Integer, Double>>(labelNumber);
-		// <label, lag_iters>, for lazy update on regularization
-		List<Map<Integer, Integer>> coeffUpdateLags = new ArrayList<Map<Integer, Integer>>(labelNumber);
-		// Initialization
-		for (int i = 0; i < labelNumber; i++) {
-			coeffLRs.add(new HashMap<Integer, Double>());
-			coeffUpdateLags.add(new HashMap<Integer, Integer>());
-		}
+		
+		Map<Integer, double[]> coeffLRs = new HashMap<>(); // <wordID, coefficient>
+		Map<Integer, int[]> coeffUpdateLags = new HashMap<>(); // <wordID, lag_iters>
 
 		// Streaming through training data from stdin
 		BufferedReader trainDataIn = new BufferedReader(new InputStreamReader(System.in));
@@ -98,22 +88,19 @@ public class LR {
 				totalIters += 1;
 				String trainDoc = trainDataIn.readLine();
 				Vector<String> tokens = tokenizeDoc(trainDoc);
-				String trainLabel = tokens.elementAt(1);
+
+				// binary responses for each classifier and features
+				int[] responses = getResponses(tokens.elementAt(1), targetLabels);
+//				System.out.println(tokens.elementAt(1) + Arrays.toString(responses));
 				Map<Integer, Integer> wordCounts = getWordCounts(tokens, vocSize, 2);
 
 				// update all binary classifiers
-				for (int i = 0; i < labelNumber; i++) {
-					trainOneDoc(targetLabels[i], trainLabel, wordCounts, totalIters,
-							coeffLRs.get(i), coeffUpdateLags.get(i), vocSize, rate,
-							regCoeff);
-				}
+				trainOneDoc(targetLabels, responses, wordCounts, totalIters, coeffLRs, coeffUpdateLags,
+						rate, regCoeff);
 			}
 
 			// lazy update for regularization
-			for (int i = 0; i < labelNumber; i++) {
-				updateRegularization(coeffLRs.get(i), coeffUpdateLags.get(i), regCoeff, rate,
-						totalIters);
-			}
+			updateRegularization(coeffLRs, coeffUpdateLags, regCoeff, rate, totalIters);
 		}
 		trainDataIn.close();
 
@@ -124,9 +111,9 @@ public class LR {
 	 * In the end of each epoch, perform all lagged updates for
 	 * regularizations.
 	 * 
-	 * @param coeffLR
+	 * @param coeffLRs
 	 *                model coefficients
-	 * @param coeffUpdateLag
+	 * @param coeffUpdateLags
 	 *                lagged iters
 	 * @param regCoeff
 	 *                regularization coefficients
@@ -135,15 +122,22 @@ public class LR {
 	 * @param totalIters
 	 *                current iter number
 	 */
-	private static void updateRegularization(Map<Integer, Double> coeffLR, Map<Integer, Integer> coeffUpdateLag,
+	private static void updateRegularization(Map<Integer, double[]> coeffLRs, Map<Integer, int[]> coeffUpdateLags,
 			double regCoeff, double rate, int totalIters) {
-		for (Integer wordID : coeffLR.keySet()) {
-			// regularization that would have been performed
-			double newcoeff = coeffLR.get(wordID)
-					* Math.pow(1 - 2 * rate * regCoeff, totalIters - coeffUpdateLag.get(wordID));
-			// update
-			coeffLR.put(wordID, newcoeff);
-			coeffUpdateLag.put(wordID, totalIters);
+
+		for (Integer wordID : coeffLRs.keySet()) {
+			double[] newcoeff = coeffLRs.get(wordID);
+			int[] updateLags = coeffUpdateLags.get(wordID);
+
+			for (int i = 0; i < newcoeff.length; i++) {
+				// regularization that would have been performed
+				newcoeff[i] *= Math.pow(1 - 2 * rate * regCoeff, totalIters - updateLags[i]);
+				// new lag iterations
+				updateLags[i] = totalIters;
+			}
+
+			coeffLRs.put(wordID, newcoeff);
+			coeffUpdateLags.put(wordID, updateLags);
 		}
 	}
 
@@ -151,52 +145,58 @@ public class LR {
 	 * Update the coefficients for a given classifier using gradient descent
 	 * from one document.
 	 * 
-	 * @param targetLabel
-	 *                the label for the classifier to be updated
-	 * @param trainLabel
-	 *                the label of this training sample
+	 * @param targetLabels
+	 *                all labels
+	 * @param responses
+	 *                binary response for each label for the document
 	 * @param wordCounts
 	 *                the frequency of words (after hash trick) in the
 	 *                document
 	 * @param totalIters
 	 *                keep track of current iteration for lazy
 	 *                regularization update
-	 * @param coeffLR
+	 * @param coeffLRs
 	 *                model parameters, to be updated
-	 * @param coeffUpdateLag
+	 * @param coeffUpdateLags
 	 *                lag iterations for regularization, to be updated
-	 * @param vocSize
-	 *                vocabulary size for the hash trick
 	 * @param rate
 	 *                learning rate
 	 * @param regCoeff
 	 *                regularization coefficients
 	 */
-	private static void trainOneDoc(String targetLabel, String trainLabel, Map<Integer, Integer> wordCounts,
-			int totalIters, Map<Integer, Double> coeffLR, Map<Integer, Integer> coeffUpdateLag, int vocSize,
+	private static void trainOneDoc(String[] targetLabels, int[] responses, Map<Integer, Integer> wordCounts,
+			int totalIters, Map<Integer, double[]> coeffLRs, Map<Integer, int[]> coeffUpdateLags,
 			double rate, double regCoeff) {
+		int labelNumber = targetLabels.length;
 
-		// response = {0, 1} for the target label
-		int response = getResponse(trainLabel, targetLabel);
+		// predicted probabilities using current model parameters
+		double[] predict = getDocPredictions(wordCounts, coeffLRs, labelNumber);
 
-		// prediction using current model parameters
-		double predict = getDocPrediction(wordCounts, coeffLR, vocSize);
-
-		// update coeffLR and coeffUpdateLag for the appeared words
+		// update coeffLRs and coeffUpdateLags for the appeared words
 		for (Integer wordID : wordCounts.keySet()) {
 			int count = wordCounts.get(wordID);
-			double newcoeff = 0;
+			// initialize at 0
+			double[] newcoeff = new double[labelNumber];
+			int[] updateLags = new int[labelNumber];
 
-			if (coeffLR.containsKey(wordID)) {
-				// regularization that would have been performed
-				newcoeff = coeffLR.get(wordID) * Math.pow(1 - 2 * rate * regCoeff,
-						totalIters - coeffUpdateLag.get(wordID));
+			// regularization that would have been performed
+			if (coeffLRs.containsKey(wordID)) {
+				newcoeff = coeffLRs.get(wordID);
+				updateLags = coeffUpdateLags.get(wordID);
+				for (int i = 0; i < labelNumber; i++) {
+					newcoeff[i] *= Math.pow(1 - 2 * rate * regCoeff, totalIters - updateLags[i]);
+				}
 			}
-			// gradient descent contributed from data
-			newcoeff += rate * (response - predict) * count;
+			for (int i = 0; i < labelNumber; i++) {
+				// gradient descent contributed from data
+				newcoeff[i] += rate * (responses[i] - predict[i]) * count;
+				// new lag iterations
+				updateLags[i] = totalIters;
+			}
+
 			// update
-			coeffLR.put(wordID, newcoeff);
-			coeffUpdateLag.put(wordID, totalIters);
+			coeffLRs.put(wordID, newcoeff);
+			coeffUpdateLags.put(wordID, updateLags);
 		}
 	}
 
@@ -207,22 +207,33 @@ public class LR {
 	 * @param wordCounts
 	 *                the frequency of words (after hash trick) in the
 	 *                document
-	 * @param coeffLR
+	 * @param coeffLRs
 	 *                current model parameter
-	 * @param vocSize
-	 *                vocabulary size for has trick
-	 * @return predicted probability in [0,1]
+	 * @param labelNumber
+	 *                number of classis
+	 * @return predicted probability in [0,1] for each classifier, length is
+	 *         labelNumber
 	 */
-	private static double getDocPrediction(Map<Integer, Integer> wordCounts, Map<Integer, Double> coeffLR, int vocSize) {
-		double score = 0;
+	private static double[] getDocPredictions(Map<Integer, Integer> wordCounts, Map<Integer, double[]> coeffLRs,
+			int labelNumber) {
+		double[] score = new double[labelNumber];
+
 		for (Integer wordID : wordCounts.keySet()) {
 			int count = wordCounts.get(wordID);
 			// only use words seen in training samples
-			if (coeffLR.containsKey(wordID)) {
-				score += coeffLR.get(wordID) * count;
+			if (coeffLRs.containsKey(wordID)) {
+				double[] coeff = coeffLRs.get(wordID);
+				for (int i = 0; i < labelNumber; i++) {
+					score[i] += coeff[i] * count;
+				}
 			}
 		}
-		return sigmoid(score);
+
+		// convert to probability
+		for (int i = 0; i < labelNumber; i++) {
+			score[i] = sigmoid(score[i]);
+		}
+		return score;
 	}
 
 	/**
@@ -239,7 +250,7 @@ public class LR {
 	 * @param vocSize
 	 *                the vocabulary size for hash trick
 	 */
-	public static void predictLR(String[] targetLabels, List<Map<Integer, Double>> coeffLRs, String testFile,
+	public static void predictLR(String[] targetLabels, Map<Integer, double[]> coeffLRs, String testFile,
 			int vocSize) throws IOException {
 		int labelNumber = targetLabels.length;
 
@@ -252,31 +263,19 @@ public class LR {
 			Vector<String> tokens = tokenizeDoc(testDoc);
 			Map<Integer, Integer> wordCounts = getWordCounts(tokens, vocSize, 2);
 			
-			// debugging
-			double maxpredict = 0;
-			String predLabel = "";
-			
-			// prediction of probability for each label
-			for (int i = 0; i < labelNumber; i++) {
-				double predict = getDocPrediction(wordCounts, coeffLRs.get(i), vocSize);
-				// output: label_1 probability_1, ...
-				String output = String.format("%s\t%f", targetLabels[i], predict);
-				if (i < labelNumber) {
-					output += ",";
-				}
-				System.out.print(output);
-
-				// for debugging
-				if (predict > maxpredict) {
-					maxpredict = predict;
-					predLabel = targetLabels[i];
-				}
-			}
-
 			// for debugging
-			System.out.print(String.format(" || true=%s,predict=%s", tokens.elementAt(1), predLabel));
+			System.out.print(String.format("%s,",tokens.elementAt(1)));
 
-			System.out.print("\n");
+			// prediction of probability for each label
+			double[] predictions = getDocPredictions(wordCounts, coeffLRs, labelNumber);
+
+			for (int i = 0; i < labelNumber - 1; i++) {
+				System.out.print(String.format("%s\t%f,", targetLabels[i], predictions[i]));
+			}
+			// last label: change line
+			System.out.println(String.format("%s\t%f", targetLabels[labelNumber - 1],
+					predictions[labelNumber - 1]));
+
 		}
 
 		testDataIn.close();
@@ -308,10 +307,13 @@ public class LR {
 	private static Vector<String> tokenizeDoc(String curDoc) {
 		String[] words = curDoc.split("\\s+");
 		Vector<String> tokens = new Vector<String>();
-		for (int i = 0; i < words.length; i++) {
+		// keep docID and Labels unchaged
+		tokens.add(words[0]);
+		tokens.add(words[1]);
+		for (int i = 2; i < words.length; i++) {
 			words[i] = words[i].replaceAll("\\W", "");
-			if (words[i].length() > 0) {
-				tokens.add(words[i]);
+			if (words[i].length() > 0 && i>=2) { 
+				tokens.add(words[i].toLowerCase());
 			}
 		}
 		return tokens;
@@ -346,16 +348,20 @@ public class LR {
 	 * label(s).
 	 * 
 	 * @param labelString
-	 *                a string of potentially multiple labels, separated by
-	 *                ","
-	 * @param targetLabel
-	 *                the target label for the binary classifier
-	 * @return response {0,1} indicating whether target label is among the
-	 *         list of labels
+	 *                the label(s) of a document, multiple labels are
+	 *                separated by ","
+	 * @param targetLabels
+	 *                the target labels for the binary classifiers
+	 * @return responses {0,1} indicating whether document belongs to each
+	 *         class
+	 * 
 	 */
-	private static int getResponse(String labelString, String targetLabel) {
-		int response = labelString.contains(targetLabel) ? 1 : 0;
-		return response;
+	private static int[] getResponses(String labelString, String[] targetLabels) {
+		int[] responses = new int[targetLabels.length];
+		for (int i = 0; i < targetLabels.length; i++) {
+			responses[i] = labelString.contains(targetLabels[i]) ? 1 : 0;
+		}
+		return responses;
 	}
 
 	/**
