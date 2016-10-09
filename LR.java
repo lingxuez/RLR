@@ -47,7 +47,7 @@ public class LR {
 				trainSize);
 
 		// prediction on test set; get probabilities for all labels
-		 predictLR(targetLabels, coeffLRs, testFile, vocSize);
+		predictLR(targetLabels, coeffLRs, testFile, vocSize);
 	}
 
 	/**
@@ -439,10 +439,12 @@ public class LR {
 	 * @return probability between [0,1] using sigmoid(score)
 	 */
 	private static double sigmoid(double score) {
-		if (score > overflow)
+		if (score > overflow) {
 			score = overflow;
-		else if (score < -overflow)
+		}
+		else if (score < -overflow) {
 			score = -overflow;
+		}
 		double exp = Math.exp(score);
 		return exp / (1 + exp);
 	}
