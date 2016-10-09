@@ -5,21 +5,16 @@ import java.io.InputStreamReader;
 import java.util.HashMap;
 import java.util.Map;
 
-/*
- * 10-605 hw3
- * @author Lingxue Zhu
- * @version 2016/10/06
- */
-
 /**
- * 10-605 hw3 Regularized Logistic Regression using stochastic gradient descent
- * and efficient lazy-update of regularization.
+ * 10-605 hw3 Regularized Logistic Regression 
+ * using on-line stochastic gradient descent, hashing trick,
+ * and efficient sparse updates by lazy-updates of regularization.
  * 
  * @author Lingxue Zhu
  * @version 2016/10/08
  */
 public class LR {
-	// for soft sigmoid
+	// for safe sigmoid avoid overflow
 	private static double overflow = 20;
 
 	/**
@@ -63,7 +58,7 @@ public class LR {
 	 * @param targetLabels
 	 *                names of all classifiers to be trained
 	 * @param vocSize
-	 *                vocabulary size for hashtables using the hash trick
+	 *                vocabulary size for hashtables using the hashing trick
 	 * @param initRate
 	 *                initial learning rate
 	 * @param regCoeff
@@ -129,7 +124,7 @@ public class LR {
 	 * @param trainSize
 	 *                number of samples
 	 * @param vocSize
-	 *                vocabulary size for hash trick
+	 *                vocabulary size for hashing trick
 	 * @param targetLabels
 	 *                labels to be predicted
 	 * @param coeffLRs
@@ -278,7 +273,7 @@ public class LR {
 	 * @param coeffLRs
 	 *                current model parameter
 	 * @param labelNumber
-	 *                number of classis
+	 *                number of classes
 	 * @return predicted probability in [0,1] for each classifier, length is
 	 *         labelNumber
 	 */
@@ -311,14 +306,14 @@ public class LR {
 	 * stdout.
 	 * 
 	 * @param targetLabels
-	 *                names of all binary classifiers
+	 *                names of all labels for binary classifiers
 	 * @param coeffLRs
 	 *                trained coefficients for logistic regression, one
 	 *                classifier for each label
 	 * @param testFile
 	 *                file name of the test data
 	 * @param vocSize
-	 *                the vocabulary size for hash trick
+	 *                the vocabulary size for hashing trick
 	 */
 	public static void predictLR(String[] targetLabels, Map<Integer, double[]> coeffLRs, String testFile,
 			int vocSize) throws IOException {
@@ -363,8 +358,8 @@ public class LR {
 		testDataIn.close();
 
 		// -- START for accuracy --
-		// System.out.println(String.format("Accuracy=%.4f",
-		// 100*correctNumber / (totalDoc * labelNumber)));
+		// double accuracy = correctNumber / (totalDoc * labelNumber);
+		// System.out.println(String.format("Accuracy=%.4f", accuracy));
 		// -- END for accuracy --
 	}
 
@@ -373,7 +368,7 @@ public class LR {
 	 * 
 	 * @param word
 	 * @param vocSize
-	 *                the size of hashtable
+	 *                the size of hashtable for hashing trick
 	 * @return an integer between [0, vocSize-1]
 	 */
 	private static int wordToID(String word, int vocSize) {
@@ -390,7 +385,7 @@ public class LR {
 	 * @param curDoc
 	 *                string for the full text in document
 	 * @param vocSize
-	 *                vocabulary size for hash trick
+	 *                vocabulary size for hashing trick
 	 * @param startIndex
 	 *                words start from this index (inclusive)
 	 * @return <key=wordID, value=count>
@@ -437,7 +432,7 @@ public class LR {
 	}
 
 	/**
-	 * A soft sigmoid function to avoid overflow.
+	 * A safe sigmoid function to avoid overflow.
 	 * 
 	 * @param score
 	 *                will be truncated between [-overflow, overflow]
