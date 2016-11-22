@@ -1,4 +1,4 @@
-# Regularized_Logistic_Regression
+# RLR: Regularized Logistic Regression
 
 This is an assginment for CMU 10-605 ["Machine Learning with Large Datasets"](http://curtis.ml.cmu.edu/w/courses/index.php/Machine_Learning_with_Large_Datasets_10-605_in_Fall_2016).
 It contains a Java implementation for L2-regularized logistic regression learning with scalable on-line stochastic gradient descent. Efficient sparse updates are achieved by lazy update of regularization. The hashing trick is used for memory saving. 
